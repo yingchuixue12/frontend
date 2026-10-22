@@ -74,12 +74,12 @@ const pageOf = <T,>(content: T[]) => ({
 })
 
 const mounted: Array<ReturnType<typeof mount>> = []
-const mountView = async () => {
+const mountView = async (query: Record<string, string> = {}) => {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/', name: 'dashboard', component: { template: '<div />' } }],
   })
-  await router.push('/')
+  await router.push({ path: '/', query })
   await router.isReady()
   const wrapper = mount(OrderView, {
     // Navigation is covered by MainLayout tests; retain real tabs, tables and drawers here.
@@ -143,6 +143,69 @@ describe('OrderView 任务/订单管理视图（1B-5b）', () => {
 
     expect(getAdminOrderDetail).toHaveBeenCalledWith('ORD-001')
     expect(wrapper.text()).toContain('¥33.30')
+  })
+
+  it('订单号关键字走服务端精确过滤，不再扫描候选集', async () => {
+    const orderNum = 'MO2026102212000012345678901'
+    getAdminOrders.mockResolvedValue(pageOf([orderFixture({ orderNum })]))
+    const wrapper = await mountView({ q: orderNum })
+
+    // 精确过滤 = 基础分页模式：首次请求即带上 orderNum，且没有第二页扫描
+    expect(getAdminOrders).toHaveBeenCalledWith({
+      page: 0,
+      size: 10,
+      status: undefined,
+      orderNum,
+      taskNum: undefined,
+    })
+    expect(wrapper.text()).toContain(orderNum)
+  })
+
+  it('任务号关键字走服务端精确过滤', async () => {
+    const taskNum = 'RT2026102212000012345678901'
+    getAdminTasks.mockResolvedValue(pageOf([taskFixture({ taskNum })]))
+    await mountView({ q: taskNum })
+
+    const orderCall = getAdminOrders.mock.calls[0][0]
+    expect(orderCall).toMatchObject({ page: 0, size: 10, taskNum, orderNum: undefined })
+    // 飞行中置顶所需的 in-progress 任务扫描同样下推 taskNum
+    expect(getAdminTasks).toHaveBeenCalledWith({
+      page: 0,
+      size: 100,
+      status: 'IN_PROGRESS',
+      taskNum,
+    })
+  })
+
+  it('飞行中筛选 + 订单号：先由订单详情取任务号，再精确查任务（不扫描）', async () => {
+    const orderNum = 'MO2026102212000012345678901'
+    const taskNum = 'RT2026102212000012345678901'
+    getAdminOrderDetail.mockResolvedValue(orderFixture({ orderNum, taskNum }))
+    getAdminTasks.mockResolvedValue(pageOf([taskFixture({ taskNum, taskStatus: 'IN_PROGRESS' })]))
+
+    const wrapper = await mountView({ q: orderNum, status: 'in_progress' })
+
+    expect(getAdminOrderDetail).toHaveBeenCalledWith(orderNum)
+    expect(getAdminTasks).toHaveBeenCalledWith({
+      page: 0,
+      size: 100,
+      status: 'IN_PROGRESS',
+      taskNum,
+    })
+    expect(getAdminOrders).not.toHaveBeenCalled()
+    // 列表以任务为行源（订单号列取任务的 orderNum），验证命中而非空态
+    expect(wrapper.text()).toContain('巡检任务')
+    expect(wrapper.text()).not.toContain('暂无订单数据')
+  })
+
+  it('飞行中筛选 + 订单号查不到关联任务时展示空结果', async () => {
+    const orderNum = 'MO2026102212000012345678901'
+    getAdminOrderDetail.mockRejectedValue(new Error('订单不存在'))
+
+    const wrapper = await mountView({ q: orderNum, status: 'in_progress' })
+
+    expect(getAdminTasks).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('暂无订单数据')
   })
 
   it('切换任务管理 tab 懒加载 /admin/tasks 并渲染任务状态与飞手', async () => {

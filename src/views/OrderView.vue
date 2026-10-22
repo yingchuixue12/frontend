@@ -14,6 +14,7 @@ import {
 } from '../api/modules/admin-query'
 import {
   buildTaskIndex,
+  classifyAdminKeyword,
   fetchPendingComplaints,
   scanInProgressTasks,
   scanOrders,
@@ -32,6 +33,8 @@ import { toCsv } from '../utils/csv'
  * 取数分两种：
  *  - 基础模式（无日期/关键字/争议/执行中筛选）：服务端分页 /admin/orders；
  *  - 客户端模式：后端不支持日期/关键字/争议过滤 → admin-scan 扫描候选集后本地筛选分页。
+ * 例外：订单号 MO…/任务号 RT… 是后端的精确过滤条件，识别为编号时下推到服务端，
+ * 不再受客户端扫描上限（1000 条）影响；其余文本关键字仍走本地模糊匹配。
  * 执行中（in_progress）筛选直接以 /admin/tasks?status=IN_PROGRESS 为行源（任务 VO 已含
  * 订单号/金额/双状态/飞手），顺带满足「飞行中置顶」。
  * ------------------------------------------------------------------ */
@@ -105,10 +108,22 @@ const loading = ref(false)
 const truncated = ref(false)
 const updatedAt = ref('--:--:--')
 
+/** URL 关键字 → 服务端精确过滤参数（编号）或本地模糊匹配（文本） */
+const keywordQuery = computed(() => classifyAdminKeyword(filters.q))
+const textKeyword = computed(() => (keywordQuery.value.kind === 'text' ? keywordQuery.value.value : ''))
+/** 服务端可精确过滤的编号参数；文本关键字为空 */
+const numberParams = computed<{ orderNum?: string; taskNum?: string }>(() => {
+  const { kind, value } = keywordQuery.value
+  if (!value) return {}
+  if (kind === 'orderNum') return { orderNum: value }
+  if (kind === 'taskNum') return { taskNum: value }
+  return {}
+})
+
 const clientMode = computed(
   () =>
     filters.status === 'in_progress' ||
-    Boolean(filters.date || filters.dispute || filters.q.trim()),
+    Boolean(filters.date || filters.dispute || textKeyword.value),
 )
 
 /** 客户端模式持有筛选后全量，页码切片在此完成；基础模式 rows 已是当前页 */
@@ -194,15 +209,29 @@ const load = async () => {
   loading.value = true
   try {
     const cutoff = dateCutoff()
-    const keyword = filters.q.trim().toLowerCase()
+    const numbers = numberParams.value
+    const keyword = textKeyword.value
     const complaints = filters.dispute === 'pending' ? await fetchPendingComplaints() : undefined
     const disputeOrders = complaints ? new Set(complaints.rows.map((item) => item.orderNum)) : undefined
 
     if (filters.status === 'in_progress') {
-      const taskScan = await scanInProgressTasks()
-      const tasks = taskScan.rows.filter(
-        (task) => task.taskStatus === 'IN_PROGRESS',
-      )
+      // 任务号可直接下推；订单号不是 /admin/tasks 的过滤条件 → 先由订单详情解析出任务号，
+      // 避免为了一个订单去扫描 1000 条执行中任务。
+      let taskNum = numbers.taskNum
+      if (!taskNum && numbers.orderNum) {
+        const detail = await getAdminOrderDetail(numbers.orderNum).catch(() => undefined)
+        if (seq !== loadSeq) return
+        taskNum = detail?.taskNum || undefined
+        if (!taskNum) {
+          rows.value = []
+          total.value = 0
+          truncated.value = false
+          updatedAt.value = formatClock()
+          return
+        }
+      }
+      const taskScan = await scanInProgressTasks({ taskNum })
+      const tasks = taskScan.rows.filter((task) => task.taskStatus === 'IN_PROGRESS')
       let list = tasks.map(fromTaskVo)
       if (cutoff) {
         list = list.filter((row) => !row.createTime || row.createTime >= cutoff)
@@ -222,7 +251,12 @@ const load = async () => {
       const [riderByTask, flying, scan] = await Promise.all([
         buildTaskIndex(),
         scanInProgressTasks(),
-        scanOrders({ status: filters.status || undefined, cutoff }),
+        scanOrders({
+          status: filters.status || undefined,
+          cutoff,
+          orderNum: numbers.orderNum,
+          taskNum: numbers.taskNum,
+        }),
       ])
       const flyingOrders = new Set(
         flying.rows
@@ -245,13 +279,13 @@ const load = async () => {
     } else {
       const [riderByTask, flying, page] = await Promise.all([
         buildTaskIndex(),
-        scanInProgressTasks(),
+        scanInProgressTasks({ taskNum: numbers.taskNum }),
         getAdminOrders({
           page: pageNo.value - 1,
           size: pageSize.value,
           status: filters.status || undefined,
-          orderNum: undefined,
-          taskNum: undefined,
+          orderNum: numbers.orderNum,
+          taskNum: numbers.taskNum,
         }),
       ])
       if (seq !== loadSeq) return

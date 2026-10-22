@@ -42,6 +42,7 @@ const CALLED_OPERATIONS: ReadonlyArray<readonly [method: string, path: string]> 
   ['post', '/live/req'],
   ['post', '/live/get'],
   ['post', '/live/close'],
+  ['post', '/live/leave'],
   ['get', '/task/detail'],
   ['get', '/task/{taskNum}/applications'],
   ['get', '/tasks/{taskNum}/attachments'],

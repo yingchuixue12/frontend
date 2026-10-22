@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildTaskIndex, fetchPendingComplaints, scanInProgressTasks, scanOrders } from '../../src/api/modules/admin-scan'
+import {
+  buildTaskIndex,
+  classifyAdminKeyword,
+  fetchPendingComplaints,
+  scanInProgressTasks,
+  scanOrders,
+} from '../../src/api/modules/admin-scan'
 
 const { getAdminOrders, getAdminTasks, getAdminComplaints } = vi.hoisted(() => ({
   getAdminOrders: vi.fn(), getAdminTasks: vi.fn(), getAdminComplaints: vi.fn(),
@@ -40,5 +46,28 @@ describe('bounded admin scans', () => {
     expect(result.rows).toHaveLength(1)
     expect(result.truncated).toBe(false)
     expect(getAdminOrders).toHaveBeenCalledTimes(1)
+  })
+
+  it('classifies full order/task numbers and pushes them to the server filters', async () => {
+    const orderNum = 'MO2026102212000012345678901'
+    const taskNum = 'RT2026102212000012345678901'
+    expect(classifyAdminKeyword(` ${orderNum.toLowerCase()} `)).toEqual({ kind: 'orderNum', value: orderNum })
+    expect(classifyAdminKeyword(taskNum)).toEqual({ kind: 'taskNum', value: taskNum })
+    // 半截编号/人名继续走模糊扫描，避免输入过程中被精确匹配成空结果
+    expect(classifyAdminKeyword('MO20261022')).toEqual({ kind: 'text', value: 'mo20261022' })
+    expect(classifyAdminKeyword(' 张三 ')).toEqual({ kind: 'text', value: '张三' })
+    expect(classifyAdminKeyword('')).toEqual({ kind: 'text', value: '' })
+
+    getAdminOrders.mockResolvedValue({ content: [{ orderNum }], totalElements: 1 })
+    await scanOrders({ orderNum })
+    expect(getAdminOrders).toHaveBeenCalledWith({
+      page: 0, size: 100, status: undefined, orderNum, taskNum: undefined,
+    })
+
+    getAdminTasks.mockResolvedValue({ content: [], totalElements: 0 })
+    await scanInProgressTasks({ taskNum })
+    expect(getAdminTasks).toHaveBeenCalledWith({
+      page: 0, size: 100, status: 'IN_PROGRESS', taskNum,
+    })
   })
 })

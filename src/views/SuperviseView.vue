@@ -20,6 +20,9 @@ const { order, task, liveDetail, deviceId, match, loading } = useOrderDetail(ord
 
 const panelCollapsed = ref(false)
 
+/** 直播态以 LiveStage 的拉流凭证为准（管理员读 /task/detail 会 403，回显恒为空） */
+const liveState = ref<string>()
+
 const isFlying = computed(() => task.value?.taskStatus === 'IN_PROGRESS')
 
 const statusTagType = computed(
@@ -43,7 +46,7 @@ const context = computed(() => {
     { label: '飞手', value: currentTask?.riderName || '—' },
     { label: '任务', value: currentOrder.taskName || currentTask?.taskName || '—' },
     { label: '作业无人机', value: deviceId.value || '—' },
-    { label: '平台直播态', value: liveDetail.value?.liveState || '—' },
+    { label: '平台直播态', value: liveState.value || '—' },
     { label: '撮合状态', value: match.value.matchStatus || '—' },
     {
       label: '任务状态',
@@ -93,7 +96,7 @@ const openManage = () => {
         </div>
 
         <div class="mt-4 grid gap-4" :class="panelCollapsed ? '' : 'xl:grid-cols-[minmax(0,68fr)_minmax(0,32fr)]'">
-          <LiveStage :live-detail="liveDetail" :device-id="deviceId" />
+          <LiveStage :live-detail="liveDetail" :device-id="deviceId" @live-state="liveState = $event" />
 
           <aside v-if="!panelCollapsed" class="flex flex-col gap-4">
             <section class="panel-card context-panel p-4">

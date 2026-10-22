@@ -5,6 +5,30 @@ import type { AdminComplaint, AdminOrderVo, AdminTaskVo } from '../../types/admi
 // 后端 /admin/orders 只支持「状态 / 订单号 / 任务号」过滤，日期、关键字、争议、执行中
 // 等筛选都得在前端做，因此需要按页扫描候选集；所有扫描一律封顶（maxPages × pageSize），
 // 到达上限仍没取完就置 truncated，由调用方提示「已截断」。
+// 编号（订单号/任务号）是后端的精确过滤条件，调用方应先用 classifyAdminKeyword 识别，
+// 再通过 orderNum/taskNum 下推到服务端，不要走扫描。
+
+/** 订单号格式：MO + 17 位时间 + 4 位用户ID + 4 位随机数（后端 OrderIdGenerator） */
+const ORDER_NUM_RE = /^MO\d{25}$/i
+/** 任务号格式：RT + 17 位时间 + 4 位用户ID + 4 位随机数（后端 RouteIdGenerator） */
+const TASK_NUM_RE = /^RT\d{25}$/i
+
+export interface KeywordQuery {
+  kind: 'orderNum' | 'taskNum' | 'text'
+  /** orderNum/taskNum：归一为大写的完整编号；text：归一为小写去空白的关键字 */
+  value: string
+}
+
+/**
+ * 区分「编号」与普通关键字。
+ * 只认完整格式：半截编号继续按关键字模糊扫描，避免用户输到一半时被精确匹配成空结果。
+ */
+export const classifyAdminKeyword = (raw: string): KeywordQuery => {
+  const keyword = raw.trim()
+  if (ORDER_NUM_RE.test(keyword)) return { kind: 'orderNum', value: keyword.toUpperCase() }
+  if (TASK_NUM_RE.test(keyword)) return { kind: 'taskNum', value: keyword.toUpperCase() }
+  return { kind: 'text', value: keyword.toLowerCase() }
+}
 
 /** 扫描页大小（后端单页上限 100） */
 export const SCAN_PAGE_SIZE = 100
@@ -31,6 +55,10 @@ export interface ScanPage<T> {
 export const scanOrders = async (options: {
   status?: string
   cutoff?: string
+  /** 订单号精确过滤（服务端） */
+  orderNum?: string
+  /** 任务号精确过滤（服务端） */
+  taskNum?: string
   pageSize?: number
   maxPages?: number
 } = {}): Promise<ScanPage<AdminOrderVo>> => {
@@ -45,8 +73,8 @@ export const scanOrders = async (options: {
       page,
       size: pageSize,
       status: options.status,
-      orderNum: undefined,
-      taskNum: undefined,
+      orderNum: options.orderNum,
+      taskNum: options.taskNum,
     })
     totalElements = data.totalElements ?? totalElements
     const content = data.content ?? []
@@ -80,6 +108,8 @@ export const scanOrders = async (options: {
 /** 扫描任务列表（status：IDLE / IN_PROGRESS / COMPLETED） */
 export const scanTasks = async (options: {
   status?: string
+  /** 任务号精确过滤（服务端） */
+  taskNum?: string
   pageSize?: number
   maxPages?: number
 } = {}): Promise<ScanPage<AdminTaskVo>> => {
@@ -93,7 +123,7 @@ export const scanTasks = async (options: {
       page,
       size: pageSize,
       status: options.status,
-      taskNum: undefined,
+      taskNum: options.taskNum,
     })
     totalElements = data.totalElements ?? totalElements
     const content = data.content ?? []
@@ -123,8 +153,10 @@ export const buildTaskIndex = async () => {
 }
 
 /** 执行中任务（首页飞行卡、订单列表 in_progress 筛选与置顶） */
-export const scanInProgressTasks = async (): Promise<ScanPage<AdminTaskVo>> =>
-  scanTasks({ status: 'IN_PROGRESS', maxPages: SCAN_MAX_PAGES })
+export const scanInProgressTasks = async (
+  options: { taskNum?: string } = {},
+): Promise<ScanPage<AdminTaskVo>> =>
+  scanTasks({ status: 'IN_PROGRESS', taskNum: options.taskNum, maxPages: SCAN_MAX_PAGES })
 
 export interface PendingComplaints {
   rows: AdminComplaint[]

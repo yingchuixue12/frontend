@@ -26,6 +26,7 @@ const {
   closeLive,
   watchLiveStop,
   getPullCredentials,
+  leaveLive,
 } = vi.hoisted(() => ({
   getAdminOrderDetail: vi.fn(),
   getAdminTaskDetail: vi.fn(),
@@ -38,6 +39,7 @@ const {
   closeLive: vi.fn(),
   watchLiveStop: vi.fn(),
   getPullCredentials: vi.fn(),
+  leaveLive: vi.fn(),
 }))
 
 vi.mock('../../src/api/modules/admin-query', async () => {
@@ -68,6 +70,7 @@ vi.mock('../../src/api/modules/live', () => ({
   closeLive,
   watchLiveStop,
   getPullCredentials,
+  leaveLive,
 }))
 
 vi.mock('../../src/api/modules/uav', async () => {

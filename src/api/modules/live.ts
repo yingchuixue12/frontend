@@ -1,4 +1,4 @@
-import { apiPost, expectData } from '../contract'
+import { apiPost, expectData, expectSuccess } from '../contract'
 import { BizError } from './order'
 import { getUavStatus } from './uav'
 import { toLiveState } from '../../types/uav'
@@ -64,6 +64,16 @@ export const closeLive = async (deviceId: string): Promise<LiveStopOutcome> => {
     message: body.message || '结束观看完成',
     settled,
   }
+}
+
+/**
+ * POST /live/leave：退出观看（1B-4b 微端点）。
+ * 仅结束当前登录用户在该设备的观看记录，不动推流与直播会话；幂等。
+ * 用于监管页切换/离开设备——不得用 /live/close 代替，那会停掉整场推流。
+ */
+export const leaveLive = async (deviceId: string): Promise<void> => {
+  const body = await apiPost('/live/leave', { params: { deviceId } })
+  expectSuccess(body, '退出观看失败')
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))

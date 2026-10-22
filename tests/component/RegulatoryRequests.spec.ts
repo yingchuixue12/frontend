@@ -7,7 +7,9 @@ import TelemetryPanel from '../../src/components/order/TelemetryPanel.vue'
 const { fetchWatchCredentials, fetchOrderTelemetry } = vi.hoisted(() => ({
   fetchWatchCredentials: vi.fn(), fetchOrderTelemetry: vi.fn(),
 }))
+const { leaveLive } = vi.hoisted(() => ({ leaveLive: vi.fn() }))
 vi.mock('../../src/api/modules/order-supervision', () => ({ fetchWatchCredentials, fetchOrderTelemetry }))
+vi.mock('../../src/api/modules/live', () => ({ leaveLive }))
 vi.mock('../../src/components/TrtcPlayer.vue', () => ({ default: {
   props: ['credentials'], template: '<div data-testid="player">{{ credentials.roomId }}</div>',
 } }))
@@ -28,6 +30,45 @@ describe('supervision request lifecycles', () => {
     old.resolve({ roomId: 'room-A' })
     await flushPromises()
     expect(wrapper.get('[data-testid="player"]').text()).toBe('room-B')
+    wrapper.unmount()
+  })
+
+  it('leaves the previous device when switching, without stopping the stream', async () => {
+    fetchWatchCredentials.mockResolvedValue({ roomId: 'room-A', liveState: 'RUNNING' })
+    const wrapper = mount(LiveStage, { props: { deviceId: 'A' }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(leaveLive).not.toHaveBeenCalled()
+
+    fetchWatchCredentials.mockResolvedValue({ roomId: 'room-B', liveState: 'RUNNING' })
+    await wrapper.setProps({ deviceId: 'B' })
+    await flushPromises()
+
+    expect(leaveLive).toHaveBeenCalledTimes(1)
+    expect(leaveLive).toHaveBeenCalledWith('A')
+    wrapper.unmount()
+    await flushPromises()
+    expect(leaveLive).toHaveBeenLastCalledWith('B')
+  })
+
+  it('closes the watch record even when credentials arrive after unmount', async () => {
+    const pending = deferred<unknown>()
+    fetchWatchCredentials.mockReturnValueOnce(pending.promise)
+    const wrapper = mount(LiveStage, { props: { deviceId: 'A' }, global: { plugins: [ElementPlus] } })
+    wrapper.unmount()
+    pending.resolve({ roomId: 'room-A' })
+    await flushPromises()
+    expect(leaveLive).toHaveBeenCalledWith('A')
+  })
+
+  it('shows the live state from pull credentials instead of /task/detail', async () => {
+    fetchWatchCredentials.mockResolvedValue({ roomId: 'room-A', liveState: 'RUNNING' })
+    const wrapper = mount(LiveStage, {
+      props: { deviceId: 'A', liveDetail: { taskNum: 'T1', liveState: 'IDLE' } },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('平台直播态 RUNNING')
+    expect(wrapper.emitted('live-state')?.at(-1)).toEqual(['RUNNING'])
     wrapper.unmount()
   })
 
