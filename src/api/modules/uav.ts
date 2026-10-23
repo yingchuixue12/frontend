@@ -59,3 +59,15 @@ export const getOrderTrajectory = async (orderNum: string): Promise<OrderGpsPoin
   }
   return body.data ?? []
 }
+
+/**
+ * 单设备最新位置（GET /webUav/position）：内存实时数据优先，缺失时后端回落到 DB 最近记录。
+ * 遥测轮询用它代替整条轨迹，避免每次拉全量点位。
+ */
+export const getUavPosition = async (deviceId: string): Promise<OrderGpsPoint | null> => {
+  const body = await apiGet('/webUav/position', { params: { deviceId } })
+  if (!body.success) {
+    throw new BizError(body.errorCode || 'POSITION_FAILED', body.message || '获取无人机位置失败')
+  }
+  return body.data ?? null
+}

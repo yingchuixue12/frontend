@@ -4,11 +4,19 @@ import ElementPlus from 'element-plus'
 import LiveStage from '../../src/components/order/LiveStage.vue'
 import TelemetryPanel from '../../src/components/order/TelemetryPanel.vue'
 
-const { fetchWatchCredentials, fetchOrderTelemetry } = vi.hoisted(() => ({
-  fetchWatchCredentials: vi.fn(), fetchOrderTelemetry: vi.fn(),
+const { fetchWatchCredentials, fetchOrderTelemetry, fetchOrderPosition, fetchOrderStartedAt } = vi.hoisted(() => ({
+  fetchWatchCredentials: vi.fn(),
+  fetchOrderTelemetry: vi.fn(),
+  fetchOrderPosition: vi.fn(),
+  fetchOrderStartedAt: vi.fn(),
 }))
 const { leaveLive } = vi.hoisted(() => ({ leaveLive: vi.fn() }))
-vi.mock('../../src/api/modules/order-supervision', () => ({ fetchWatchCredentials, fetchOrderTelemetry }))
+vi.mock('../../src/api/modules/order-supervision', () => ({
+  fetchWatchCredentials,
+  fetchOrderTelemetry,
+  fetchOrderPosition,
+  fetchOrderStartedAt,
+}))
 vi.mock('../../src/api/modules/live', () => ({ leaveLive }))
 vi.mock('../../src/components/TrtcPlayer.vue', () => ({ default: {
   props: ['credentials'], template: '<div data-testid="player">{{ credentials.roomId }}</div>',
@@ -75,8 +83,12 @@ describe('supervision request lifecycles', () => {
   it('discards old telemetry and does not start polling after unmount', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     const old = deferred<unknown>()
-    fetchOrderTelemetry.mockReturnValueOnce(old.promise).mockResolvedValueOnce({ altitude: 80 })
-    const wrapper = mount(TelemetryPanel, { props: { orderNum: 'A' }, global: { plugins: [ElementPlus] } })
+    fetchOrderStartedAt.mockResolvedValue(undefined)
+    fetchOrderPosition.mockReturnValueOnce(old.promise).mockResolvedValueOnce({ altitude: 80 })
+    const wrapper = mount(TelemetryPanel, {
+      props: { orderNum: 'A', deviceId: 'D1' },
+      global: { plugins: [ElementPlus] },
+    })
     await wrapper.setProps({ orderNum: 'B' })
     await flushPromises()
     expect(wrapper.text()).toContain('80.0 m')
@@ -85,18 +97,56 @@ describe('supervision request lifecycles', () => {
     expect(wrapper.text()).not.toContain('10.0 m')
     wrapper.unmount()
     vi.advanceTimersByTime(30_000)
-    expect(fetchOrderTelemetry).toHaveBeenCalledTimes(2)
+    expect(fetchOrderPosition).toHaveBeenCalledTimes(2)
   })
 
   it('does not leave a polling timer when initial load finishes after unmount', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     const pending = deferred<null>()
-    fetchOrderTelemetry.mockReturnValue(pending.promise)
-    const wrapper = mount(TelemetryPanel, { props: { orderNum: 'A' }, global: { plugins: [ElementPlus] } })
+    fetchOrderStartedAt.mockResolvedValue(undefined)
+    fetchOrderPosition.mockReturnValue(pending.promise)
+    const wrapper = mount(TelemetryPanel, {
+      props: { orderNum: 'A', deviceId: 'D1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    expect(fetchOrderPosition).toHaveBeenCalledTimes(1)
     wrapper.unmount()
     pending.resolve(null)
     await flushPromises()
     vi.advanceTimersByTime(30_000)
-    expect(fetchOrderTelemetry).toHaveBeenCalledTimes(1)
+    expect(fetchOrderPosition).toHaveBeenCalledTimes(1)
+  })
+
+  it('polls one position point and reuses the trajectory start time', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    fetchOrderStartedAt.mockResolvedValue(1_000)
+    fetchOrderPosition.mockResolvedValue({ altitude: 55, speed: 3, battery: 80 })
+    const wrapper = mount(TelemetryPanel, {
+      props: { orderNum: 'A', deviceId: 'D1' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(fetchOrderStartedAt).toHaveBeenCalledWith('A')
+    expect(fetchOrderPosition).toHaveBeenCalledWith('D1', 1_000)
+    expect(fetchOrderTelemetry).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    // 起飞时间只取一次，后续帧直接复用
+    expect(fetchOrderStartedAt).toHaveBeenCalledTimes(1)
+    expect(fetchOrderPosition).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('falls back to the order trajectory when the task has no device', async () => {
+    const wrapper = mount(TelemetryPanel, {
+      props: { orderNum: 'A', deviceId: null },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(fetchOrderPosition).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('该任务暂无作业设备')
   })
 })

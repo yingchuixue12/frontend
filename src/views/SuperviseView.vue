@@ -120,7 +120,7 @@ const openManage = () => {
               </div>
             </section>
 
-            <TelemetryPanel :order-num="order.orderNum || ''" />
+            <TelemetryPanel :order-num="order.orderNum || ''" :device-id="deviceId" />
           </aside>
         </div>
       </template>

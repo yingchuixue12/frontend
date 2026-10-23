@@ -1,8 +1,12 @@
 import { apiGet, expectData, type Schemas } from '../contract'
 import { getAdminComplaints } from './admin-query'
 import { getPullCredentials } from './live'
-import { getOrderTrajectory } from './uav'
-import { summarizeTrajectory, type TelemetrySummary } from '../../utils/telemetry'
+import { getOrderTrajectory, getUavPosition } from './uav'
+import {
+  summarizePosition,
+  summarizeTrajectory,
+  type TelemetrySummary,
+} from '../../utils/telemetry'
 import type { AdminComplaint, AdminOrderVo, AdminTaskVo } from '../../types/admin'
 import type { LiveCredentials } from '../../types/uav'
 
@@ -152,6 +156,33 @@ export const fetchOrderTelemetry = async (orderNum: string): Promise<TelemetrySu
     return summarizeTrajectory(await getOrderTrajectory(orderNum)) ?? null
   } catch (err) {
     console.warn('[order-supervision] 遥测轨迹不可用：', err)
+    return null
+  }
+}
+
+/**
+ * 遥测轮询用 `/webUav/position` 取最新一点，代替早期每 10 秒拉整条
+ * `/webUav/trajectory`（订单全量点位，越飞越慢）。单点推不出起飞时间，
+ * 由调用方一次性取轨迹起点后经 startedAt 传入；缺失只影响「已飞时长」。
+ */
+export const fetchOrderPosition = async (
+  deviceId: string,
+  startedAt?: number | null,
+): Promise<TelemetrySummary | null> => {
+  try {
+    return summarizePosition(await getUavPosition(deviceId), startedAt ?? undefined) ?? null
+  } catch (err) {
+    console.warn('[order-supervision] 实时位置不可用：', err)
+    return null
+  }
+}
+
+/** 起飞时间：订单首帧轨迹的首点时间戳；无轨迹/接口失败 → null（不阻断轮询） */
+export const fetchOrderStartedAt = async (orderNum: string): Promise<number | null> => {
+  try {
+    return summarizeTrajectory(await getOrderTrajectory(orderNum))?.startedAt ?? null
+  } catch (err) {
+    console.warn('[order-supervision] 轨迹起点不可用：', err)
     return null
   }
 }

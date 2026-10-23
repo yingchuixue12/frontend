@@ -13,13 +13,14 @@ import type {
 } from '../../src/types/admin'
 import { formatDateTime } from '../../src/utils/date'
 
-const { getAdminTasks, getAdminOrders, getAdminComplaints, getAdminPilots, getOrderTrajectory } =
+const { getAdminTasks, getAdminOrders, getAdminComplaints, getAdminPilots, getOrderTrajectory, getUavPosition } =
   vi.hoisted(() => ({
     getAdminTasks: vi.fn(),
     getAdminOrders: vi.fn(),
     getAdminComplaints: vi.fn(),
     getAdminPilots: vi.fn(),
     getOrderTrajectory: vi.fn(),
+    getUavPosition: vi.fn(),
   }))
 
 // 只 mock 查询函数；admin-scan 编排（分页扫描/cutoff）走真实实现
@@ -30,7 +31,7 @@ vi.mock('../../src/api/modules/admin-query', async () => {
   >
   return { ...actual, getAdminTasks, getAdminOrders, getAdminComplaints, getAdminPilots }
 })
-vi.mock('../../src/api/modules/uav', () => ({ getOrderTrajectory }))
+vi.mock('../../src/api/modules/uav', () => ({ getOrderTrajectory, getUavPosition }))
 
 const pageOf = <T,>(content: T[], totalElements = content.length) => ({
   content,
@@ -56,6 +57,7 @@ const inProgressTask: AdminTaskVo = {
   totalAmount: 980,
   totalDistance: 1250,
   riderName: '李四',
+  deviceId: 'DJI-F01',
   createTime: formatDateTime(new Date()),
   updateTime: formatDateTime(new Date()),
 }
@@ -145,6 +147,7 @@ describe('首页看板（TASK-FRONTEND-002）', () => {
     })
     getAdminPilots.mockResolvedValue(pageOf([], 2))
     getOrderTrajectory.mockResolvedValue(trajectoryFixture())
+    getUavPosition.mockResolvedValue(trajectoryFixture().at(-1))
   })
 
   afterEach(() => {
@@ -272,15 +275,34 @@ describe('首页看板（TASK-FRONTEND-002）', () => {
     // 本用例自行挂载并在中断言卸载，不走统一 cleanup（避免重复卸载）
     const local = mount(HomeView, { global: { plugins: [router, ElementPlus] } })
     await flushPromises()
+    // 首帧：一次轨迹只为取起飞时间 + 一次位置取当前值
     expect(getOrderTrajectory).toHaveBeenCalledTimes(1)
+    expect(getUavPosition).toHaveBeenCalledTimes(1)
+    expect(getUavPosition).toHaveBeenCalledWith('DJI-F01')
 
     vi.advanceTimersByTime(10_000)
     await flushPromises()
-    expect(getOrderTrajectory).toHaveBeenCalledTimes(2)
+    // 后续轮询只取单点，轨迹不再重复拉取
+    expect(getOrderTrajectory).toHaveBeenCalledTimes(1)
+    expect(getUavPosition).toHaveBeenCalledTimes(2)
 
     local.unmount()
     vi.advanceTimersByTime(30_000)
     await flushPromises()
-    expect(getOrderTrajectory).toHaveBeenCalledTimes(2)
+    expect(getOrderTrajectory).toHaveBeenCalledTimes(1)
+    expect(getUavPosition).toHaveBeenCalledTimes(2)
+  })
+
+  it('刚起飞轨迹为空时重试数次后停止拉整条轨迹', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    getOrderTrajectory.mockResolvedValue([])
+    const local = mount(HomeView, { global: { plugins: [router, ElementPlus] } })
+    await flushPromises()
+
+    // 首帧 + 两次重试；轨迹始终为空，之后只轮询位置
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(getOrderTrajectory).toHaveBeenCalledTimes(3)
+    expect(getUavPosition).toHaveBeenCalledTimes(7)
+    local.unmount()
   })
 })

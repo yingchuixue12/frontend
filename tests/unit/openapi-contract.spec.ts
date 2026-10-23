@@ -37,6 +37,7 @@ const CALLED_OPERATIONS: ReadonlyArray<readonly [method: string, path: string]> 
   ['post', '/admin/complaint/{id}/reject'],
   ['get', '/webUav/getUav'],
   ['get', '/webUav/status'],
+  ['get', '/webUav/position'],
   ['get', '/webUav/trajectory'],
   ['get', '/rider/recommended'],
   ['post', '/live/req'],

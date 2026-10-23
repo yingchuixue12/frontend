@@ -94,7 +94,7 @@ const context = computed(() => [
             </div>
           </section>
 
-          <TelemetryPanel :order-num="props.order.orderNum || ''" />
+          <TelemetryPanel :order-num="props.order.orderNum || ''" :device-id="props.deviceId" />
         </div>
       </div>
     </section>

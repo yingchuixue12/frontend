@@ -18,10 +18,14 @@ import { forEachConcurrent } from '../utils/concurrency'
 import MainLayout from '../layouts/MainLayout.vue'
 import { getAdminComplaints, getAdminPilots } from '../api/modules/admin-query'
 import { scanInProgressTasks, scanOrders } from '../api/modules/admin-scan'
-import { getOrderTrajectory } from '../api/modules/uav'
+import { getOrderTrajectory, getUavPosition } from '../api/modules/uav'
 import type { AdminComplaint, AdminOrderVo, AdminTaskVo } from '../types/admin'
 import { formatClock, formatDateTime, formatDuration } from '../utils/date'
-import { summarizeTrajectory, type TelemetrySummary } from '../utils/telemetry'
+import {
+  summarizePosition,
+  summarizeTrajectory,
+  type TelemetrySummary,
+} from '../utils/telemetry'
 
 /**
  * 首页看板（REQ-FRONTEND-001 §1）：
@@ -35,6 +39,10 @@ const router = useRouter()
 interface FlyingCard {
   task: AdminTaskVo
   telemetry?: TelemetrySummary
+  /** 起飞时间（首帧轨迹首点，ms）：位置接口只给最新一点，推不出已飞时长 */
+  startedAt?: number | null
+  /** 轨迹起点探测次数；刚起飞时轨迹可能还是空，限次重试后不再拉整条轨迹 */
+  startedAtTries?: number
 }
 
 interface TodoItem {
@@ -52,6 +60,8 @@ const COMPLAINT_REASON_LABELS: Record<string, string> = {
 }
 
 const TELEMETRY_POLL_MS = 10_000
+/** 起飞时间探测上限（刚起飞时轨迹可能为空）：之后只轮询位置，不再拉整条轨迹 */
+const STARTED_AT_MAX_TRIES = 3
 
 const loading = ref(false)
 const loadError = ref('')
@@ -171,7 +181,12 @@ const telemetrySummary = (card: FlyingCard) => {
   return parts.length > 0 ? parts.join(' · ') : '等待设备上报'
 }
 
-/** 拉取全部飞行卡的轨迹并截取首尾点位 → 遥测摘要 */
+/**
+ * 拉取全部飞行卡的实时遥测。
+ * 每张卡首帧补一次 `/webUav/trajectory` 只为拿起飞时间（订单维度、不随轮询增长）；
+ * 常态轮询走 `/webUav/position`，每次只取一个点，避免整条轨迹越飞越慢。
+ * 没有作业设备（未绑定/离线）的卡回退到轨迹摘要，保持旧展示。
+ */
 let telemetryInFlight: Promise<void> | undefined
 const refreshTelemetry = (): Promise<void> => {
   if (telemetryInFlight) return telemetryInFlight
@@ -181,6 +196,22 @@ const refreshTelemetry = (): Promise<void> => {
     const orderNum = card.task.orderNum
     if (!orderNum) return
     try {
+      const deviceId = card.task.deviceId
+      if (deviceId) {
+        if (card.startedAt === undefined && (card.startedAtTries ?? 0) < STARTED_AT_MAX_TRIES) {
+          card.startedAtTries = (card.startedAtTries ?? 0) + 1
+          const points = await getOrderTrajectory(orderNum).catch(() => [])
+          if (disposed || flyingCards.value !== cards) return
+          const startedAt = summarizeTrajectory(points)?.startedAt
+          // 拿不到就保持 undefined：限次内下一轮再试，超过次数后只显示位置、不显示已飞时长
+          card.startedAt = startedAt ?? (card.startedAtTries >= STARTED_AT_MAX_TRIES ? null : undefined)
+        }
+        const point = await getUavPosition(deviceId)
+        if (!disposed && flyingCards.value === cards) {
+          card.telemetry = summarizePosition(point, card.startedAt ?? undefined)
+        }
+        return
+      }
       const points = await getOrderTrajectory(orderNum)
       if (!disposed && flyingCards.value === cards) card.telemetry = summarizeTrajectory(points)
     } catch {
