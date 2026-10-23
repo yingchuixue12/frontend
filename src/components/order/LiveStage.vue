@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 const TrtcPlayer = defineAsyncComponent(() => import('../TrtcPlayer.vue').then((module) => module.default))
-import { fetchWatchCredentials } from '../../api/modules/order-supervision'
-import { leaveLive } from '../../api/modules/live'
+import { createLiveWatch } from '../../api/modules/live-watch'
 import type { TaskProgressive } from '../../api/modules/order-supervision'
 import type { LiveCredentials } from '../../types/uav'
 
@@ -36,26 +35,11 @@ const onPlayerError = (message: string) => {
   note.value = message
 }
 
-/** 已成功拉流（= 后端已为本用户开观看记录）的设备；离开时只对它调 leave */
-let watchingDeviceId: string | null = null
-
-const releaseWatch = (deviceId: string) => {
-  Promise.resolve(leaveLive(deviceId)).catch((err: unknown) => {
-    console.warn('[LiveStage] 退出观看失败：', err)
-  })
-}
-
 watch(
   () => props.deviceId,
   async (deviceId, _previous, onCleanup) => {
     let active = true
-    onCleanup(() => {
-      active = false
-      if (watchingDeviceId) {
-        releaseWatch(watchingDeviceId)
-        watchingDeviceId = null
-      }
-    })
+    onCleanup(() => { active = false })
     credentials.value = null
     if (deviceId === undefined) {
       stage.value = 'resolving'
@@ -71,18 +55,18 @@ watch(
 
     stage.value = 'resolving'
     note.value = ''
-    const pulled = await fetchWatchCredentials(deviceId)
-    if (!active) {
-      // 请求已让后端开了观看记录，但结果已过期（切换设备/卸载）：立即收口，避免悬挂记录
-      if (pulled) releaseWatch(deviceId)
-      return
-    }
+    const watching = createLiveWatch(deviceId)
+    onCleanup(() => { active = false; watching.release() })
+    const pulled = await watching.credentials.catch((err: unknown) => {
+      console.warn('[LiveStage] 拉流凭证不可用：', err)
+      return null
+    })
+    if (!active) return
     if (!pulled) {
       stage.value = 'waiting'
       note.value = '图传未就绪：设备离线或未开播（只读接入，不会下发开播命令）'
       return
     }
-    watchingDeviceId = deviceId
     credentials.value = pulled
     stage.value = 'ready'
   },

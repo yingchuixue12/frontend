@@ -1,6 +1,5 @@
 import { apiGet, expectData, type Schemas } from '../contract'
 import { getAdminComplaints } from './admin-query'
-import { getPullCredentials } from './live'
 import { getOrderTrajectory, getUavPosition } from './uav'
 import {
   summarizePosition,
@@ -8,7 +7,6 @@ import {
   type TelemetrySummary,
 } from '../../utils/telemetry'
 import type { AdminComplaint, AdminOrderVo, AdminTaskVo } from '../../types/admin'
-import type { LiveCredentials } from '../../types/uav'
 
 /**
  * 订单详情双模式（TASK-FRONTEND-003）的取数与 VO 映射——撮合字段的唯一读取点。
@@ -183,19 +181,6 @@ export const fetchOrderStartedAt = async (orderNum: string): Promise<number | nu
     return summarizeTrajectory(await getOrderTrajectory(orderNum))?.startedAt ?? null
   } catch (err) {
     console.warn('[order-supervision] 轨迹起点不可用：', err)
-    return null
-  }
-}
-
-/**
- * 只读拉流凭证（POST /live/get）：仅生成 TRTC 观看凭据，不下发开播/停播命令（ADR-0004 旁听语义）。
- * 设备离线/未开播 → null，图传区降级为提示。
- */
-export const fetchWatchCredentials = async (deviceId: string): Promise<LiveCredentials | null> => {
-  try {
-    return await getPullCredentials(deviceId, '')
-  } catch (err) {
-    console.warn('[order-supervision] 拉流凭证不可用：', err)
     return null
   }
 }
